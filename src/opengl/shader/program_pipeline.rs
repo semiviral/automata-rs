@@ -1,4 +1,4 @@
-use crate::opengl::GLObject;
+use crate::opengl::OpenGLObject;
 
 use super::{Fragment, ShaderProgram, Vertex};
 
@@ -32,9 +32,13 @@ impl ProgramPipeline {
 
         _self
     }
+
+    pub fn bind(&self) {
+        unsafe { gl::BindProgramPipeline(self.handle()) };
+    }
 }
 
-impl crate::opengl::GLObject for ProgramPipeline {
+impl crate::opengl::OpenGLObject for ProgramPipeline {
     fn handle(&self) -> u32 {
         self.handle
     }

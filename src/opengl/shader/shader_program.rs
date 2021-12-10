@@ -1,4 +1,4 @@
-use crate::opengl::GLObject;
+use crate::opengl::OpenGLObject;
 use std::collections::BTreeMap;
 
 pub trait ShaderType {
@@ -47,7 +47,7 @@ impl<T: ShaderType> ShaderProgram<T> {
             let handle = gl::CreateShaderProgramv(
                 T::GL_ENUM_VALUE,
                 program_strings.len() as i32,
-                program_strings as *const _ as *const _,
+                program_strings.as_ptr() as *const _,
             );
 
             let mut uniforms = BTreeMap::new();
@@ -96,9 +96,13 @@ impl<T: ShaderType> ShaderProgram<T> {
             _self
         }
     }
+
+    pub fn get_uniform(&self, name: &str, location: i32) -> Option<i32> {
+        self.uniforms.get(&name.to_owned()).copied()
+    }
 }
 
-impl<T: ShaderType> GLObject for ShaderProgram<T> {
+impl<T: ShaderType> OpenGLObject for ShaderProgram<T> {
     fn handle(&self) -> u32 {
         self.handle
     }

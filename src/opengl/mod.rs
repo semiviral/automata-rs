@@ -1,6 +1,10 @@
+mod vertex_array_object;
 pub mod shader;
+pub mod buffer;
 
-pub trait GLObject {
+pub use vertex_array_object::*;
+
+pub trait OpenGLObject {
     fn handle(&self) -> u32;
 
     fn get_info_log(&self) -> Option<String> {
