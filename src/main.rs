@@ -1,11 +1,11 @@
-#![feature(raw_ref_op, const_fn_trait_bound)]
+#![feature(raw_ref_op, const_fn_trait_bound, linked_list_cursors, once_cell)]
 
 use winit::{dpi::LogicalSize, event_loop::*};
 
 mod collections;
 mod opengl;
-mod pos;
-mod render;
+mod render; 
+mod memory;
 
 extern crate gl;
 extern crate log;
@@ -15,6 +15,8 @@ const DEFAULT_VERTEX_SRC: &str = r#"
 
     layout (location = 0) in vec2 v_pos;
     layout (location = 1) in vec3 v_color;
+
+    out gl_PerVertex { vec4 gl_Position; };
 
     layout (location = 0) out vec3 a_color;
 
@@ -67,6 +69,24 @@ fn main() {
     .unwrap();
     gl_context.make_current();
     gl::load_with(|s| gl_context.get_proc_address(s) as *const _);
+
+    // Initialize OpenGL.
+    unsafe {
+        let version = std::ffi::CStr::from_ptr(gl::GetString(gl::VERSION) as *const _);
+        println!("OpenGL Version: {:?}", version);
+
+        let mut flags = 0;
+        gl::GetIntegerv(gl::CONTEXT_FLAGS, &raw mut flags);
+        if ((flags as u32) & gl::CONTEXT_FLAG_DEBUG_BIT) == 0 {
+            println!(
+                "OpenGL device does not support a debug context. Error reporting will be impacted."
+            );
+        } else {
+            gl::Enable(gl::DEBUG_OUTPUT);
+            gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);
+            todo!("Set up default debug output callback.");
+        }
+    }
 
     use opengl::shader::{Fragment, ShaderProgram, Vertex};
     let vertex_shader = ShaderProgram::<Vertex>::new(&[DEFAULT_VERTEX_SRC]);
