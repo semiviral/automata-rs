@@ -1,7 +1,7 @@
 use std::{
     collections::{
         linked_list::{Cursor, CursorMut},
-        LinkedList,
+        BinaryHeap, LinkedList,
     },
     lazy::OnceCell,
     num::NonZeroUsize,
@@ -42,7 +42,7 @@ impl MemoryPool {
         self.total_bytes - self.rented_bytes
     }
 
-    pub fn rent<'a, T>(
+    pub fn rent_slice<'a, T>(
         &'a mut self,
         size: NonZeroUsize,
         alignment: NonZeroUsize,
@@ -163,5 +163,48 @@ impl MemoryPool {
                 map_cursor.insert_after(after_block);
             }
         })
+    }
+
+    fn return_slice<'a, T>(&'a mut self, slice: MemorySlice<'a, T>) {
+        let mut map = self
+            .map
+            .lock()
+            .expect("Memory pool map mutex has been poisoned!");
+
+        let mut del_prev = false;
+        let mut del_next = true;
+        let mut slice_cursor = map.cursor_front_mut();
+        while let Some(block) = slice_cursor.current() {
+            if block.index == slice.index {
+                if let Some(prev) = slice_cursor.peek_prev() {
+                    if !prev.owned {
+                        block.index = prev.index;
+                        block.size += prev.size;
+                        del_prev = true;
+                    }
+                }
+
+                if let Some(next) = slice_cursor.peek_next() {
+                    if !next.owned {
+                        block.size += next.size;
+                        del_next = true;
+                    }
+                }
+
+                return;
+            }
+
+            slice_cursor.move_next();
+        }
+
+        if del_prev {
+            slice_cursor.move_prev();
+            slice_cursor.remove_current();
+        }
+
+        if del_next {
+            slice_cursor.move_next();
+            slice_cursor.remove_current();
+        }
     }
 }
