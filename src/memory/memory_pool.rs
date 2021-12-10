@@ -1,5 +1,8 @@
 use std::{
-    collections::{linked_list::Cursor, LinkedList},
+    collections::{
+        linked_list::{Cursor, CursorMut},
+        LinkedList,
+    },
     lazy::OnceCell,
     num::NonZeroUsize,
     sync::Mutex,
@@ -45,102 +48,120 @@ impl MemoryPool {
         alignment: NonZeroUsize,
         zero_memory: bool,
     ) -> Option<MemorySlice<'a, T>> {
-        let mut memory_slice = OnceCell::new();
         let mut map = self
             .map
             .lock()
             .expect("Memory pool map mutex has been poisoned!");
+        // Calculate the real size in bytes of a rental request.
         let size_in_bytes = size.get() * std::mem::size_of::<T>();
 
-        if size_in_bytes <= self.remaining_bytes() {
-            let mut map_cursor = map.cursor_front_mut();
+        // If the pool cannot serve a request, fail early.
+        if size_in_bytes > self.remaining_bytes() {
+            return None;
+        }
 
-            while let Some(block) = map_cursor.current() {
-                if !block.owned {
-                    if alignment.get() > 0 {
-                        // Determine padding required to align current block's index.
-                        let alignment_padding =
-                            (alignment.get() - (block.index % alignment.get())) % alignment.get();
-                        // Properly aligned index of block.
-                        let aligned_index = block.index + alignment_padding;
-                        // Size of block, minus the bytes before the aligned index.
-                        let aligned_size = block.size - alignment_padding;
+        let mut map_cursor = map.cursor_front_mut();
+        let mut before_cursor = OnceCell::new();
+        let mut after_cursor = OnceCell::new();
+        let mut memory_slice = OnceCell::new();
 
-                        // Ensure no overflow, in which case size is too small.
-                        if aligned_size <= block.size {
-                            if alignment_padding == 0 && block.size == size_in_bytes {
-                                block.owned = true;
-                            } else if aligned_size >= size_in_bytes {
-                                if aligned_index > block.index {
-                                    // If our alignment forces us out-of-alignment with
-                                    // this block's  index, then allocate a block before to
-                                    // facilitate the unaligned size.
-                                    map_cursor.insert_before(MemoryBlock {
+        while let Some(block) = map_cursor.current() {
+            if !block.owned {
+                if alignment.get() > 0 {
+                    // Determine padding required to align current block's index.
+                    let alignment_padding =
+                        (alignment.get() - (block.index % alignment.get())) % alignment.get();
+                    // Properly aligned index of block.
+                    let aligned_index = block.index + alignment_padding;
+                    // Size of block, minus the bytes before the aligned index.
+                    let aligned_size = block.size - alignment_padding;
+
+                    // Ensure no overflow, in which case size is too small.
+                    if aligned_size <= block.size {
+                        if alignment_padding == 0 && block.size == size_in_bytes {
+                            block.owned = true;
+                        } else if aligned_size >= size_in_bytes {
+                            if aligned_index > block.index {
+                                // If our alignment forces us out-of-alignment with
+                                // this block's  index, then allocate a block before to
+                                // facilitate the unaligned size.
+                                before_cursor
+                                    .set(MemoryBlock {
                                         index: block.index,
                                         size: alignment_padding,
                                         owned: false,
-                                    });
+                                    })
+                                    .unwrap_or_else(|_| panic!(""));
 
-                                    block.size = block.size - alignment_padding;
-                                }
+                                block.size = block.size - alignment_padding;
+                            }
 
-                                map_cursor.insert_after(MemoryBlock {
+                            after_cursor
+                                .set(MemoryBlock {
                                     index: block.index + size_in_bytes,
                                     size: block.size - size_in_bytes,
                                     owned: false,
-                                });
+                                })
+                                .unwrap_or_else(|_| panic!(""));
 
-                                block.size = size_in_bytes;
-                                block.owned = true;
-                            }
-                        }
-                    } else {
-                        if block.size == size_in_bytes {
-                            block.owned = true;
-                        } else if block.size > size_in_bytes {
-                            // Allocate new block after current with remaining length.
-                            map_cursor.insert_after(MemoryBlock {
-                                index: block.index + size_in_bytes,
-                                size: block.size - size_in_bytes,
-                                owned: false,
-                            });
-
-                            // Modify current block to reflect modified state.
                             block.size = size_in_bytes;
                             block.owned = true;
                         }
                     }
+                } else {
+                    if block.size == size_in_bytes {
+                        block.owned = true;
+                    } else if block.size > size_in_bytes {
+                        // Allocate new block after current with remaining length.
+                        after_cursor
+                            .set(MemoryBlock {
+                                index: block.index + size_in_bytes,
+                                size: block.size - size_in_bytes,
+                                owned: false,
+                            })
+                            .unwrap_or_else(|_| panic!(""));
 
-                    // If the block is now owned, we've successfully rented it out.
-                    if block.owned {
-                        unsafe {
-                            let block_start_ptr = self.head.add(block.index);
-
-                            if zero_memory {
-                                std::ptr::write_bytes(block_start_ptr, 0, size_in_bytes);
-                            }
-
-                            memory_slice
-                                .set(MemorySlice::<'a> {
-                                    index: block.index,
-                                    slice: &mut *std::slice::from_raw_parts_mut(
-                                        self.head.add(block.index) as *mut _,
-                                        size_in_bytes,
-                                    ),
-                                })
-                                .ok();
-                        }
-
-                        self.rented_bytes += size_in_bytes;
-                        self.rented_blocks += 1;
-                        break;
+                        // Modify current block to reflect modified state.
+                        block.size = size_in_bytes;
+                        block.owned = true;
                     }
                 }
 
-                map_cursor.move_next();
+                // If the block is now owned, we've successfully rented it out.
+                if block.owned {
+                    self.rented_bytes += size_in_bytes;
+                    self.rented_blocks += 1;
+
+                    unsafe {
+                        if zero_memory {
+                            std::ptr::write_bytes(self.head.add(block.index), 0, size_in_bytes);
+                        }
+
+                        memory_slice
+                            .set(MemorySlice::<'a> {
+                                index: block.index,
+                                slice: &mut *std::slice::from_raw_parts_mut(
+                                    self.head.add(block.index) as *mut _,
+                                    size_in_bytes,
+                                ),
+                            })
+                            .unwrap_or_else(|_| panic!(""));
+                    }
+                }
             }
+
+            // Advance the cursor to the next item.
+            map_cursor.move_next();
         }
 
-        memory_slice.take()
+        memory_slice.take().inspect(|_| {
+            if let Some(before_block) = before_cursor.take() {
+                map_cursor.insert_before(before_block);
+            }
+
+            if let Some(after_block) = after_cursor.take() {
+                map_cursor.insert_after(after_block);
+            }
+        })
     }
 }

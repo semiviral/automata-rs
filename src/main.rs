@@ -1,4 +1,4 @@
-#![feature(raw_ref_op, const_fn_trait_bound, linked_list_cursors, once_cell)]
+#![feature(raw_ref_op, const_fn_trait_bound, linked_list_cursors, once_cell, result_option_inspect)]
 
 use winit::{dpi::LogicalSize, event_loop::*};
 
