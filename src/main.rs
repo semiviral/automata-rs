@@ -1,14 +1,26 @@
-#![feature(raw_ref_op, const_fn_trait_bound, linked_list_cursors, once_cell, result_option_inspect)]
+#![feature(
+    raw_ref_op,
+    const_fn_trait_bound,
+    linked_list_cursors,
+    once_cell,
+    result_option_inspect
+)]
 
 use winit::{dpi::LogicalSize, event_loop::*};
 
-mod collections;
-mod opengl;
-mod render; 
-mod memory;
+use crate::blocks::BlockRegistry;
 
-extern crate gl;
+mod blocks;
+mod chunks;
+mod collections;
+mod logger;
+mod memory;
+mod opengl;
+mod render;
+
+#[macro_use]
 extern crate log;
+extern crate gl;
 
 const DEFAULT_VERTEX_SRC: &str = r#"
     #version 450 core
@@ -43,6 +55,10 @@ const VERTICES: [f32; 15] = [
 ];
 
 fn main() {
+    log::set_max_level(log::LevelFilter::Debug);
+    log::set_logger(&logger::LOGGER).unwrap();
+    crate::blocks::REGISTRY.lazy_init();
+
     let event_loop = EventLoop::new();
     let window = winit::window::WindowBuilder::new()
         .with_title("Automata")
@@ -73,12 +89,12 @@ fn main() {
     // Initialize OpenGL.
     unsafe {
         let version = std::ffi::CStr::from_ptr(gl::GetString(gl::VERSION) as *const _);
-        println!("OpenGL Version: {:?}", version);
+        info!("OpenGL version string: {:?}", version);
 
         let mut flags = 0;
         gl::GetIntegerv(gl::CONTEXT_FLAGS, &raw mut flags);
         if ((flags as u32) & gl::CONTEXT_FLAG_DEBUG_BIT) == 0 {
-            println!(
+            warn!(
                 "OpenGL device does not support a debug context. Error reporting will be impacted."
             );
         } else {
