@@ -1,16 +1,23 @@
 use std::{
-    collections::{
-        linked_list::{Cursor, CursorMut},
-        BinaryHeap, LinkedList,
-    },
+    collections::LinkedList,
     lazy::OnceCell,
     num::NonZeroUsize,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 pub struct MemorySlice<'a, T> {
+    pool: &'a MemoryPool,
     index: usize,
     slice: &'a mut [T],
+}
+
+impl<T> Drop for MemorySlice<'_, T> {
+    fn drop(&mut self) {
+        self.pool.return_slice(self)
+    }
 }
 
 struct MemoryBlock {
@@ -21,29 +28,50 @@ struct MemoryBlock {
 
 pub struct MemoryPool {
     head: *mut u8,
-    total_bytes: usize,
     map: Mutex<LinkedList<MemoryBlock>>,
-    rented_bytes: usize,
-    rented_blocks: usize,
+    total_bytes: AtomicUsize,
+    rented_bytes: AtomicUsize,
+    rented_blocks: AtomicUsize,
+}
+
+impl<T> core::ops::Index<usize> for MemorySlice<'_, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.slice[index]
+    }
+}
+
+impl<T> core::ops::IndexMut<usize> for MemorySlice<'_, T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.slice[index]
+    }
 }
 
 impl MemoryPool {
     pub fn new(head: *mut u8, byte_len: usize) -> Self {
+        let mut map = LinkedList::new();
+        map.push_front(MemoryBlock {
+            index: 0,
+            size: byte_len,
+            owned: false,
+        });
+
         Self {
             head,
-            total_bytes: byte_len,
-            map: Mutex::new(LinkedList::new()),
-            rented_bytes: 0,
-            rented_blocks: 0,
+            map: Mutex::new(map),
+            total_bytes: AtomicUsize::new(byte_len),
+            rented_bytes: AtomicUsize::new(0),
+            rented_blocks: AtomicUsize::new(0),
         }
     }
 
     pub fn remaining_bytes(&self) -> usize {
-        self.total_bytes - self.rented_bytes
+        self.total_bytes.load(Ordering::Acquire) - self.rented_bytes.load(Ordering::Acquire)
     }
 
     pub fn rent_slice<'a, T>(
-        &'a mut self,
+        &'a self,
         size: NonZeroUsize,
         alignment: NonZeroUsize,
         zero_memory: bool,
@@ -52,6 +80,7 @@ impl MemoryPool {
             .map
             .lock()
             .expect("Memory pool map mutex has been poisoned!");
+
         // Calculate the real size in bytes of a rental request.
         let size_in_bytes = size.get() * std::mem::size_of::<T>();
 
@@ -129,8 +158,9 @@ impl MemoryPool {
 
                 // If the block is now owned, we've successfully rented it out.
                 if block.owned {
-                    self.rented_bytes += size_in_bytes;
-                    self.rented_blocks += 1;
+                    self.rented_bytes
+                        .fetch_add(size_in_bytes, Ordering::AcqRel);
+                    self.rented_blocks.fetch_add(1, Ordering::AcqRel);
 
                     unsafe {
                         if zero_memory {
@@ -139,6 +169,7 @@ impl MemoryPool {
 
                         memory_slice
                             .set(MemorySlice::<'a> {
+                                pool: self,
                                 index: block.index,
                                 slice: &mut *std::slice::from_raw_parts_mut(
                                     self.head.add(block.index) as *mut _,
@@ -165,30 +196,26 @@ impl MemoryPool {
         })
     }
 
-    fn return_slice<'a, T>(&'a mut self, slice: MemorySlice<'a, T>) {
+    fn return_slice<'a, T>(&'a self, slice: &mut MemorySlice<'a, T>) {
         let mut map = self
             .map
             .lock()
             .expect("Memory pool map mutex has been poisoned!");
 
-        let mut del_prev = false;
-        let mut del_next = true;
+        let prev_unowned = OnceCell::new();
+        let next_unowned = OnceCell::new();
         let mut slice_cursor = map.cursor_front_mut();
         while let Some(block) = slice_cursor.current() {
             if block.index == slice.index {
-                if let Some(prev) = slice_cursor.peek_prev() {
-                    if !prev.owned {
-                        block.index = prev.index;
-                        block.size += prev.size;
-                        del_prev = true;
-                    }
+                self.rented_blocks.fetch_sub(1, Ordering::AcqRel);
+                self.rented_bytes.fetch_sub(block.size, Ordering::AcqRel);
+
+                if let Some(prev) = slice_cursor.peek_prev().filter(|a| !a.owned) {
+                    prev_unowned.set((prev.index, prev.size)).unwrap();
                 }
 
-                if let Some(next) = slice_cursor.peek_next() {
-                    if !next.owned {
-                        block.size += next.size;
-                        del_next = true;
-                    }
+                if let Some(next) = slice_cursor.peek_next().filter(|a| !a.owned) {
+                    next_unowned.set((next.index, next.size)).unwrap();
                 }
 
                 return;
@@ -197,12 +224,19 @@ impl MemoryPool {
             slice_cursor.move_next();
         }
 
-        if del_prev {
+        if let Some((index, size)) = prev_unowned.get() {
+            let mut block = slice_cursor.current().unwrap();
+            block.index = *index;
+            block.size += *size;
+
             slice_cursor.move_prev();
             slice_cursor.remove_current();
         }
 
-        if del_next {
+        if let Some((_, size)) = next_unowned.get() {
+            let mut block = slice_cursor.current().unwrap();
+            block.size += *size;
+
             slice_cursor.move_next();
             slice_cursor.remove_current();
         }
