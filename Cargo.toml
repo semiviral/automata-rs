@@ -12,3 +12,6 @@ winit = "*"
 specs = { version = "*", features = ["specs-derive"] }
 mint = "*"
 log = "*"
+bitflags = "*"
+lazy_static = "*"
+chrono = { version = "*", default-features = false, features = ["clock"] }
