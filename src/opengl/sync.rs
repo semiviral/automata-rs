@@ -1,3 +1,4 @@
+use gl::types::GLsync;
 use num_enum::TryFromPrimitive;
 use std::convert::TryFrom;
 
@@ -11,13 +12,17 @@ pub enum SyncStatus {
 }
 
 pub struct FenceSync {
-    sync: gl::types::GLsync,
+    sync: GLsync,
 }
 
 impl FenceSync {
+    fn generate_sync(flags: u32) -> GLsync {
+        unsafe { gl::FenceSync(gl::SYNC_GPU_COMMANDS_COMPLETE, flags) }
+    }
+
     pub fn new(flags: u32) -> Self {
         Self {
-            sync: unsafe { gl::FenceSync(gl::SYNC_GPU_COMMANDS_COMPLETE, flags) },
+            sync: Self::generate_sync(flags),
         }
     }
 
@@ -36,6 +41,13 @@ impl FenceSync {
             {
                 break;
             }
+        }
+    }
+
+    pub fn regenerate(&mut self, flags: u32) {
+        unsafe {
+            gl::DeleteSync(self.sync);
+            self.sync = Self::generate_sync(flags);
         }
     }
 }
