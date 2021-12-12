@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 lazy_static::lazy_static! {
     pub static ref LOGGER: Logger = Logger {};
 }

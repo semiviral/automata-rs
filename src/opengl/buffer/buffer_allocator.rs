@@ -1,5 +1,3 @@
-use std::num::{ NonZeroUsize};
-
 use crate::{memory::MemoryPool, opengl::OpenGLObject};
 
 pub struct BufferAllocator {
@@ -28,8 +26,8 @@ impl BufferAllocator {
 
     pub fn rent_slice<'a, T>(
         &'a self,
-        size: NonZeroUsize,
-        alignment: NonZeroUsize,
+        size: std::num::NonZeroUsize,
+        alignment: std::num::NonZeroUsize,
         zero_memory: bool,
     ) -> Option<crate::memory::MemorySlice<'a, T>> {
         self.pool.rent_slice(size, alignment, zero_memory)

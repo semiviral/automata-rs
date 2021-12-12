@@ -1,7 +1,6 @@
 use std::{
     collections::LinkedList,
     lazy::OnceCell,
-    num::NonZeroUsize,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
@@ -12,6 +11,26 @@ pub struct MemorySlice<'a, T> {
     pool: &'a MemoryPool,
     index: usize,
     slice: &'a mut [T],
+}
+
+impl<T> MemorySlice<'_, T> {
+    pub const fn start_offset(&self) -> usize {
+        self.index
+    }
+}
+
+impl<T> core::ops::Index<usize> for MemorySlice<'_, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.slice[index]
+    }
+}
+
+impl<T> core::ops::IndexMut<usize> for MemorySlice<'_, T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.slice[index]
+    }
 }
 
 impl<T> Drop for MemorySlice<'_, T> {
@@ -32,20 +51,6 @@ pub struct MemoryPool {
     total_bytes: AtomicUsize,
     rented_bytes: AtomicUsize,
     rented_blocks: AtomicUsize,
-}
-
-impl<T> core::ops::Index<usize> for MemorySlice<'_, T> {
-    type Output = T;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.slice[index]
-    }
-}
-
-impl<T> core::ops::IndexMut<usize> for MemorySlice<'_, T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.slice[index]
-    }
 }
 
 impl MemoryPool {
@@ -72,8 +77,8 @@ impl MemoryPool {
 
     pub fn rent_slice<'a, T>(
         &'a self,
-        size: NonZeroUsize,
-        alignment: NonZeroUsize,
+        size: std::num::NonZeroUsize,
+        alignment: std::num::NonZeroUsize,
         zero_memory: bool,
     ) -> Option<MemorySlice<'a, T>> {
         let mut map = self
@@ -158,8 +163,7 @@ impl MemoryPool {
 
                 // If the block is now owned, we've successfully rented it out.
                 if block.owned {
-                    self.rented_bytes
-                        .fetch_add(size_in_bytes, Ordering::AcqRel);
+                    self.rented_bytes.fetch_add(size_in_bytes, Ordering::AcqRel);
                     self.rented_blocks.fetch_add(1, Ordering::AcqRel);
 
                     unsafe {
