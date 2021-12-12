@@ -1,6 +1,7 @@
-mod vertex_array_object;
-pub mod shader;
+pub mod sync;
 pub mod buffer;
+pub mod shader;
+mod vertex_array_object;
 
 pub use vertex_array_object::*;
 
@@ -30,4 +31,11 @@ pub trait OpenGLObject {
             None
         }
     }
+}
+
+#[repr(u32)]
+pub enum DrawElementsType {
+    u8 = 5121,
+    u16 = 5123,
+    u32 = 5125,
 }

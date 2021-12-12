@@ -73,6 +73,17 @@ pub struct VertexArrayObject {
 }
 
 impl VertexArrayObject {
+    pub fn new() -> Self {
+        let mut handle = 0;
+        unsafe { gl::CreateVertexArrays(1, &raw mut handle) };
+
+        Self {
+            handle,
+            vertex_attribs: Vec::new(),
+            vertex_buffer_bindings: BTreeMap::new(),
+        }
+    }
+
     pub fn clear_vertex_attributes(&mut self) {
         self.vertex_attribs.clear();
     }
@@ -84,7 +95,7 @@ impl VertexArrayObject {
     pub fn allocate_vertex_buffer_binding(
         &mut self,
         binding_index: u32,
-        buffer: Box<dyn OpenGLObject>,
+        buffer: &impl OpenGLObject,
         vertex_offset: isize,
         divisor: u32,
     ) {
@@ -98,7 +109,7 @@ impl VertexArrayObject {
             .insert(binding_index, vertex_buffer_binding);
     }
 
-    pub fn commit(&self, element_buffer_object: Option<Box<dyn OpenGLObject>>) {
+    pub fn commit(&self, element_buffer_object: Option<&impl OpenGLObject>) {
         // Calculate total strides for various vertex attribute binding indexes.
         if let Some(max_binding_index) = self
             .vertex_attribs
@@ -147,6 +158,10 @@ impl VertexArrayObject {
                 unsafe { gl::VertexArrayElementBuffer(self.handle(), ebo.handle()) };
             }
         }
+    }
+
+    pub fn bind(&self) {
+        unsafe { gl::BindVertexArray(self.handle()) };
     }
 }
 
