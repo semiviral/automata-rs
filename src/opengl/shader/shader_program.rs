@@ -2,37 +2,37 @@ use crate::opengl::OpenGLObject;
 use std::collections::BTreeMap;
 
 pub trait ShaderType {
-    const GL_ENUM_VALUE: u32;
+    const SHADER_TYPE: u32;
 }
 
 pub enum Fragment {}
 impl ShaderType for Fragment {
-    const GL_ENUM_VALUE: u32 = 35632;
+    const SHADER_TYPE: u32 = gl::FRAGMENT_SHADER;
 }
 
 pub enum Vertex {}
 impl ShaderType for Vertex {
-    const GL_ENUM_VALUE: u32 = 35633;
+    const SHADER_TYPE: u32 = gl::VERTEX_SHADER;
 }
 
 pub enum Geometry {}
 impl ShaderType for Geometry {
-    const GL_ENUM_VALUE: u32 = 36313;
+    const SHADER_TYPE: u32 = gl::GEOMETRY_SHADER;
 }
 
 pub enum TessellationEval {}
 impl ShaderType for TessellationEval {
-    const GL_ENUM_VALUE: u32 = 36487;
+    const SHADER_TYPE: u32 = gl::TESS_EVALUATION_SHADER;
 }
 
 pub enum TessellationControl {}
 impl ShaderType for TessellationControl {
-    const GL_ENUM_VALUE: u32 = 36488;
+    const SHADER_TYPE: u32 = gl::TESS_CONTROL_SHADER;
 }
 
 pub enum Compute {}
 impl ShaderType for Compute {
-    const GL_ENUM_VALUE: u32 = 37305;
+    const SHADER_TYPE: u32 = gl::COMPUTE_SHADER;
 }
 
 pub struct ShaderProgram<T: ShaderType> {
@@ -42,13 +42,42 @@ pub struct ShaderProgram<T: ShaderType> {
 }
 
 impl<T: ShaderType> ShaderProgram<T> {
+    fn get_info_log(handle: u32) -> Option<String> {
+        let mut log_len = 0;
+        unsafe { gl::GetProgramiv(handle, gl::INFO_LOG_LENGTH, &raw mut log_len) };
+
+        if log_len > 0 {
+            let mut log = vec![0; log_len as usize];
+            unsafe {
+                gl::GetProgramInfoLog(
+                    handle,
+                    log.len() as i32,
+                    &raw mut log_len,
+                    log.as_mut_ptr() as *mut _,
+                )
+            };
+
+            Some(
+                String::from_utf8(log)
+                    .expect("Failed to convert info log bytes into a valid UTF-8 string."),
+            )
+        } else {
+            None
+        }
+    }
+
     pub fn new(program_strings: &[&str]) -> Self {
         unsafe {
             let handle = gl::CreateShaderProgramv(
-                T::GL_ENUM_VALUE,
+                T::SHADER_TYPE,
                 program_strings.len() as i32,
                 program_strings.as_ptr() as *const _,
             );
+
+            crate::opengl::check_errors();
+            if let Some(info_log) = Self::get_info_log(handle) {
+                panic!("OpenGL failed to compile program object: {}", info_log);
+            }
 
             let mut uniforms = BTreeMap::new();
             let mut uniform_count = -1;
@@ -83,17 +112,11 @@ impl<T: ShaderType> ShaderProgram<T> {
                 );
             }
 
-            let _self = Self {
+            Self {
                 handle,
                 uniforms,
                 marker: std::marker::PhantomData,
-            };
-
-            if let Some(log) = _self.get_info_log() {
-                panic!("OpenGL object info log: {}", log);
             }
-
-            _self
         }
     }
 

@@ -18,19 +18,14 @@ impl ProgramPipeline {
             gl::CreateProgramPipelines(1, &raw mut handle);
             gl::UseProgramStages(handle, gl::VERTEX_SHADER_BIT, vertex_shader.handle());
             gl::UseProgramStages(handle, gl::FRAGMENT_SHADER_BIT, fragment_shader.handle());
+            crate::opengl::check_errors();
         }
 
-        let _self = Self {
+        Self {
             handle,
             vertex: vertex_shader,
             fragment: fragment_shader,
-        };
-
-        if let Some(log) = _self.get_info_log() {
-            panic!("OpenGL object info log: {}", log);
         }
-
-        _self
     }
 
     pub fn bind(&self) {

@@ -2,6 +2,8 @@ use gl::types::GLsync;
 use num_enum::TryFromPrimitive;
 use std::convert::TryFrom;
 
+use crate::ring::RingIndex;
+
 #[repr(u32)]
 #[derive(Debug, PartialEq, Eq, TryFromPrimitive)]
 pub enum SyncStatus {
@@ -55,5 +57,48 @@ impl FenceSync {
 impl Drop for FenceSync {
     fn drop(&mut self) {
         unsafe { gl::DeleteSync(self.sync) };
+    }
+}
+
+pub struct RingFenceSync {
+    ring: RingIndex,
+    fences: Vec<FenceSync>,
+}
+
+impl RingFenceSync {
+    pub fn new(count: usize) -> Self {
+        Self {
+            ring: RingIndex::new(count),
+            fences: {
+                let mut vec = Vec::with_capacity(count);
+
+                for _ in 0..count {
+                    vec.push(FenceSync::new(0));
+                }
+
+                vec
+            },
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        self.ring.index()
+    }
+
+    pub fn next_index(&self) -> usize {
+        self.ring.next_index()
+    }
+
+    pub fn wait_current(&self) {
+        self.fences[self.ring.index()].busy_wait_cpu();
+    }
+
+    pub fn wait_enter_next(&mut self) {
+        self.fences[self.ring.next_index()].busy_wait_cpu();
+        self.ring.increment();
+    }
+
+    pub fn fence_current(&mut self) {
+        self.fences[self.ring.index()] = FenceSync::new(0);
     }
 }

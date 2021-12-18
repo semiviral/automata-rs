@@ -3,34 +3,37 @@ pub mod shader;
 pub mod sync;
 mod vertex_array_object;
 
+use num_enum::TryFromPrimitive;
+use std::convert::TryFrom;
 pub use vertex_array_object::*;
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+pub enum GLError {
+    NoError = 0,
+    InvalidEnum = 1280,
+    InvalidValue = 1281,
+    InvalidOperation = 1282,
+    StackOverflow = 1283,
+    StackUnderflow = 1284,
+    OutOfMemory = 1285,
+    InvalidFramebufferOperation = 1286,
+}
+
+pub fn check_errors() {
+    match GLError::try_from(unsafe { gl::GetError() }) {
+        Ok(gl_error) if gl_error != GLError::NoError => {
+            panic!("OpenGL error: {:?}", gl_error);
+        }
+        Err(err) => {
+            panic!("Invalid OpenGL error code: {:?}", err)
+        }
+        _ => {}
+    }
+}
 
 pub trait OpenGLObject {
     fn handle(&self) -> u32;
-
-    fn get_info_log(&self) -> Option<String> {
-        let mut log_len = 0;
-        unsafe { gl::GetProgramiv(self.handle(), gl::INFO_LOG_LENGTH, &raw mut log_len) };
-
-        if log_len > 0 {
-            let mut log = vec![0; log_len as usize];
-            unsafe {
-                gl::GetProgramInfoLog(
-                    self.handle(),
-                    log.len() as i32,
-                    &raw mut log_len,
-                    log.as_mut_ptr() as *mut _,
-                )
-            };
-
-            Some(
-                String::from_utf8(log)
-                    .expect("Failed to convert info log bytes into a valid UTF-8 string."),
-            )
-        } else {
-            None
-        }
-    }
 }
 
 #[repr(u32)]

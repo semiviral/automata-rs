@@ -1,62 +1,78 @@
+use super::OpenGLObject;
 use std::collections::BTreeMap;
 
-use super::OpenGLObject;
-
-pub trait VertexAttribute {
-    fn index(&self) -> u32;
-    fn dimensions(&self) -> i32;
-    fn offset(&self) -> u32;
-    fn binding_index(&self) -> u32;
-    fn normalized(&self) -> bool;
-    fn stride(&self) -> u32;
-
-    fn commit_vao_format(&self, vao_handle: u32);
+#[derive(Debug, Clone, Copy)]
+pub enum VertexFormat {
+    F32(bool),
+    F64,
+    U8,
+    U16,
+    U32,
 }
 
-pub struct PackedVertexAttribute {
+impl VertexFormat {
+    pub const fn get_stride(&self) -> u32 {
+        match self {
+            Self::F32(_) | Self::U32 => 4,
+            Self::F64 => 8,
+            Self::U8 => 1,
+            Self::U16 => 2,
+        }
+    }
+
+    pub const fn as_u32(self) -> u32 {
+        match self {
+            Self::F32(_) => gl::FLOAT,
+            Self::F64 => gl::DOUBLE,
+            Self::U8 => gl::UNSIGNED_BYTE,
+            Self::U16 => gl::UNSIGNED_SHORT,
+            Self::U32 => gl::UNSIGNED_INT,
+        }
+    }
+}
+
+struct VertexAttribute {
     index: u32,
     dimensions: i32,
     offset: u32,
     binding_index: u32,
-    normalized: bool,
-    stride: u32,
+    format: VertexFormat,
 }
 
-impl VertexAttribute for PackedVertexAttribute {
-    fn index(&self) -> u32 {
-        self.index
-    }
-
-    fn dimensions(&self) -> i32 {
-        self.dimensions
-    }
-
-    fn offset(&self) -> u32 {
-        self.offset
-    }
-
-    fn binding_index(&self) -> u32 {
-        self.binding_index
-    }
-
-    fn normalized(&self) -> bool {
-        self.normalized
-    }
-
-    fn stride(&self) -> u32 {
-        self.stride
-    }
-
+impl VertexAttribute {
     fn commit_vao_format(&self, vao_handle: u32) {
         unsafe {
-            gl::VertexArrayAttribIFormat(
-                vao_handle,
-                self.index(),
-                self.dimensions(),
-                gl::UNSIGNED_INT,
-                self.offset(),
-            )
-        };
+            match self.format {
+                VertexFormat::F32(normalized) => {
+                    gl::VertexArrayAttribFormat(
+                        vao_handle,
+                        self.index,
+                        self.dimensions,
+                        self.format.as_u32(),
+                        normalized as u8,
+                        self.offset,
+                    );
+                }
+                VertexFormat::F64 => {
+                    gl::VertexArrayAttribLFormat(
+                        vao_handle,
+                        self.index,
+                        self.dimensions,
+                        self.format.as_u32(),
+                        self.offset,
+                    );
+                }
+                VertexFormat::U8 | VertexFormat::U16 | VertexFormat::U32 => {
+                    gl::VertexArrayAttribIFormat(
+                        vao_handle,
+                        self.index,
+                        self.dimensions,
+                        self.format.as_u32(),
+                        self.offset,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -68,7 +84,7 @@ struct VertexBufferObjectBinding {
 
 pub struct VertexArrayObject {
     handle: u32,
-    vertex_attribs: Vec<Box<dyn VertexAttribute>>,
+    vertex_attribs: Vec<VertexAttribute>,
     vertex_buffer_bindings: BTreeMap<u32, VertexBufferObjectBinding>,
 }
 
@@ -88,8 +104,21 @@ impl VertexArrayObject {
         self.vertex_attribs.clear();
     }
 
-    pub fn allocate_vertex_attribute(&mut self, vertex_attrib: Box<dyn VertexAttribute>) {
-        self.vertex_attribs.push(vertex_attrib);
+    pub fn allocate_vertex_attribute(
+        &mut self,
+        index: u32,
+        dimensions: u32,
+        offset: u32,
+        binding_index: u32,
+        format: VertexFormat,
+    ) {
+        self.vertex_attribs.push(VertexAttribute {
+            index,
+            dimensions: dimensions as i32,
+            offset,
+            binding_index,
+            format,
+        });
     }
 
     pub fn allocate_vertex_buffer_binding(
@@ -109,28 +138,29 @@ impl VertexArrayObject {
             .insert(binding_index, vertex_buffer_binding);
     }
 
-    pub fn commit(&self, element_buffer_object: Option<&impl OpenGLObject>) {
+    pub fn commit(&self, element_buffer_object: Option<&dyn OpenGLObject>) {
         // Calculate total strides for various vertex attribute binding indexes.
         if let Some(max_binding_index) = self
             .vertex_attribs
             .iter()
-            .max_by_key(|attrib| attrib.binding_index())
-            .map(|attrib| attrib.binding_index())
+            .max_by_key(|attrib| attrib.binding_index)
+            .map(|attrib| attrib.binding_index)
         {
             let mut strides = vec![0u32; (max_binding_index + 1) as usize];
 
             for vertex_attrib in self.vertex_attribs.iter() {
                 unsafe {
-                    gl::EnableVertexArrayAttrib(self.handle(), vertex_attrib.index());
+                    gl::EnableVertexArrayAttrib(self.handle(), vertex_attrib.index);
                     vertex_attrib.commit_vao_format(self.handle());
                     gl::VertexArrayAttribBinding(
                         self.handle(),
-                        vertex_attrib.index(),
-                        vertex_attrib.binding_index(),
+                        vertex_attrib.index,
+                        vertex_attrib.binding_index,
                     );
                 }
 
-                strides[vertex_attrib.binding_index() as usize] += vertex_attrib.stride();
+                strides[vertex_attrib.binding_index as usize] +=
+                    (vertex_attrib.dimensions as u32) * vertex_attrib.format.get_stride();
             }
 
             // Commit the VBO bindings.

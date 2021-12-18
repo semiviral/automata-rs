@@ -1,6 +1,8 @@
 mod buffer_allocator;
+mod ring_buffer;
 
 pub use buffer_allocator::*;
+pub use ring_buffer::*;
 
 use super::OpenGLObject;
 use std::mem::size_of;
@@ -60,13 +62,13 @@ pub enum BufferTarget {
     AtomicCounter = 37568,
 }
 
-pub struct Buffer<'s, T: Copy> {
+pub struct Buffer<T: Copy> {
     handle: u32,
     data_len: usize,
-    data: Option<&'s mut [T]>,
+    data_ptr: Option<*mut T>,
 }
 
-impl<'s, T: Copy> Buffer<'s, T> {
+impl<T: Copy> Buffer<T> {
     pub fn new() -> Self {
         let mut handle = 0;
 
@@ -75,7 +77,7 @@ impl<'s, T: Copy> Buffer<'s, T> {
         Self {
             handle,
             data_len: 0,
-            data: None,
+            data_ptr: None,
         }
     }
 
@@ -120,15 +122,23 @@ impl<'s, T: Copy> Buffer<'s, T> {
     }
 
     fn data<'a>(&'a self) -> &'a [T] {
-        self.data
-            .as_ref()
-            .expect("Cannot use buffer data when it isn't pinned.")
+        unsafe {
+            std::slice::from_raw_parts(
+                self.data_ptr
+                    .expect("Cannot use buffer data when it isn't pinned."),
+                self.data_len,
+            )
+        }
     }
 
     fn data_mut<'a>(&'a mut self) -> &'a mut [T] {
-        self.data
-            .as_mut()
-            .expect("Cannot use buffer data when it isn't pinned.")
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.data_ptr
+                    .expect("Cannot use buffer data when it isn't pinned."),
+                self.data_len,
+            )
+        }
     }
 
     pub unsafe fn pin(&mut self, flags: MapBufferAccessFlags) {
@@ -136,13 +146,13 @@ impl<'s, T: Copy> Buffer<'s, T> {
             self.data_len() > 0,
             "Buffer length must be >0 to be pinned."
         );
-        assert!(self.data.is_none(), "Buffer has already been pinned!");
+        assert!(self.data_ptr.is_none(), "Buffer has already been pinned!");
 
-        let ptr = gl::MapNamedBufferRange(self.handle(), 0, self.byte_len() as _, flags.bits());
-        self.data = Some(std::slice::from_raw_parts_mut(
-            ptr as *mut _,
-            self.data_len(),
-        ));
+        self.data_ptr =
+            Some(
+                gl::MapNamedBufferRange(self.handle(), 0, self.byte_len() as _, flags.bits())
+                    as *mut _,
+            );
     }
 
     pub unsafe fn pin_range(
@@ -156,23 +166,22 @@ impl<'s, T: Copy> Buffer<'s, T> {
             "Range cannot exceed total buffer length."
         );
 
-        let ptr = gl::MapNamedBufferRange(
+        self.data_ptr = Some(gl::MapNamedBufferRange(
             self.handle(),
             offset,
             (data_len * size_of::<T>()) as isize,
             flags.bits(),
-        );
-        self.data = Some(std::slice::from_raw_parts_mut(ptr as *mut _, data_len));
+        ) as *mut _);
     }
 
     pub unsafe fn unpin(&mut self) {
         gl::UnmapNamedBuffer(self.handle());
-        self.data = None;
+        self.data_ptr = None;
     }
 
     pub fn resize_storage(&mut self, data_len: usize, flags: MapBufferAccessFlags) {
         assert!(
-            self.data.is_none(),
+            self.data_ptr.is_none(),
             "Cannot resize buffer storage while buffer is pinned."
         );
 
@@ -190,7 +199,7 @@ impl<'s, T: Copy> Buffer<'s, T> {
 
     pub fn set_data(&mut self, data: &[T], draw: BufferDraw) {
         assert!(
-            self.data.is_none(),
+            self.data_ptr.is_none(),
             "Cannot use `set_data` when buffer is pinned."
         );
 
@@ -205,24 +214,32 @@ impl<'s, T: Copy> Buffer<'s, T> {
             );
 
             self.pin(MapBufferAccessFlags::WRITE | MapBufferAccessFlags::INVALIDATE_BUFFER);
-            self.data_mut().copy_from_slice(data);
+            std::intrinsics::copy_nonoverlapping(
+                data.as_ptr(),
+                self.data_ptr.unwrap(),
+                self.data_len,
+            );
             self.unpin();
         }
     }
 
-    pub fn sub_data(&mut self, offset: isize, data: &[T]) {
+    pub fn sub_data(&mut self, offset: usize, data: &[T]) {
         assert!(
-            self.data.is_none(),
+            self.data_ptr.is_none(),
             "Cannot use `sub_data` when buffer is pinned."
+        );
+        assert!(
+            (offset + data.len()) < self.data_len,
+            "Offset + data must be less than the total length of the buffer."
         );
 
         unsafe {
             self.pin_range(
-                offset,
+                offset as isize,
                 data.len(),
                 MapBufferAccessFlags::WRITE | MapBufferAccessFlags::INVALIDATE_RANGE,
             );
-            self.data_mut().copy_from_slice(data);
+            std::intrinsics::copy_nonoverlapping(data.as_ptr(), self.data_ptr.unwrap(), data.len());
             self.unpin();
         }
     }
@@ -232,28 +249,52 @@ impl<'s, T: Copy> Buffer<'s, T> {
     }
 }
 
-impl<T: Copy> crate::opengl::OpenGLObject for Buffer<'_, T> {
+impl<T: Copy> crate::opengl::OpenGLObject for Buffer<T> {
     fn handle(&self) -> u32 {
         self.handle
     }
 }
 
-impl<T: Copy> std::ops::Index<usize> for Buffer<'_, T> {
+impl<T: Copy> std::ops::Index<usize> for Buffer<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
-        &self.data()[index]
+        assert!(
+            index < self.data_len,
+            "Index cannot be greater than the total length of the buffer."
+        );
+        assert!(
+            self.data_ptr.is_some(),
+            "Buffer cannot be indexed unless it's pinned."
+        );
+
+        unsafe { &*(self.data_ptr.unwrap().add(index)) }
     }
 }
 
-impl<T: Copy> std::ops::IndexMut<usize> for Buffer<'_, T> {
+impl<T: Copy> std::ops::IndexMut<usize> for Buffer<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.data_mut()[index]
+        assert!(
+            index < self.data_len,
+            "Index cannot be greater than the total length of the buffer."
+        );
+        assert!(
+            self.data_ptr.is_some(),
+            "Buffer cannot be indexed unless it's pinned."
+        );
+
+        unsafe { &mut *(self.data_ptr.unwrap().add(index)) }
     }
 }
 
-impl<T: Copy> Drop for Buffer<'_, T> {
+impl<T: Copy> Drop for Buffer<T> {
     fn drop(&mut self) {
-        unsafe { gl::DeleteBuffers(1, &raw const self.handle) };
+        unsafe {
+            if self.data_ptr.is_some() {
+                self.unpin();
+            }
+
+            gl::DeleteBuffers(1, &raw const self.handle);
+        }
     }
 }

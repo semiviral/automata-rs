@@ -1,11 +1,10 @@
-use gl::DrawArraysIndirect;
-use mint::RowMatrix4;
-
 use crate::opengl::{
-    buffer::{Buffer, BufferAllocator, MapBufferAccessFlags},
+    buffer::{Buffer, BufferAllocator, MapBufferAccessFlags, RingBuffer},
     sync::FenceSync,
     VertexArrayObject,
 };
+use glam::Mat4;
+use specs::{Component, HashMapStorage};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -35,18 +34,20 @@ impl DrawElementsIndirectCommand {
     }
 }
 
-pub struct MultiDrawIndirectMesh<'a> {
-    commands: Buffer<'a, DrawElementsIndirectCommand>,
+#[derive(Component)]
+#[storage(HashMapStorage)]
+pub struct MultiDrawIndirectMesh {
+    commands: Buffer<DrawElementsIndirectCommand>,
     next_command_index: u32,
     buffer_allocator: BufferAllocator,
     vertex_array_obj: VertexArrayObject,
-    models: Buffer<'a, RowMatrix4<f32>>,
+    models: Buffer<glam::Mat4>,
     next_model_index: u32,
     draw_type: crate::opengl::DrawElementsType,
     draw_sync: FenceSync,
 }
 
-impl MultiDrawIndirectMesh<'_> {
+impl MultiDrawIndirectMesh {
     pub fn new(allocator_size: usize, draw_type: crate::opengl::DrawElementsType) -> Self {
         const MAX_MODEL_COUNT: usize = 21000;
 
@@ -75,8 +76,6 @@ impl MultiDrawIndirectMesh<'_> {
 
     pub fn prepare_draw(&mut self, command_count: u32) {
         if (command_count as usize) > self.commands.data_len() {
-            use crate::opengl::buffer::MapBufferAccessFlags;
-
             self.commands.resize_storage(
                 command_count as usize,
                 MapBufferAccessFlags::WRITE | MapBufferAccessFlags::INVALIDATE_BUFFER,
@@ -105,7 +104,7 @@ impl MultiDrawIndirectMesh<'_> {
         self.next_command_index += 1;
     }
 
-    pub fn push_model(&mut self, model: RowMatrix4<f32>) {
+    pub fn push_model(&mut self, model: glam::Mat4) {
         self.models[self.next_model_index as usize] = model;
         self.next_model_index += 1;
     }
@@ -116,12 +115,19 @@ impl MultiDrawIndirectMesh<'_> {
 
     pub fn push_vertex_attrib(
         &mut self,
-        vertex_attribs: Vec<Box<dyn crate::opengl::VertexAttribute>>,
+        index: u32,
+        dimensions: u32,
+        offset: u32,
+        binding_index: u32,
+        format: crate::opengl::VertexFormat,
     ) {
-        for vertex_attrib in vertex_attribs {
-            self.vertex_array_obj
-                .allocate_vertex_attribute(vertex_attrib);
-        }
+        self.vertex_array_obj.allocate_vertex_attribute(
+            index,
+            dimensions,
+            offset,
+            binding_index,
+            format,
+        );
     }
 
     pub fn commit_vao(&mut self) {
@@ -137,9 +143,6 @@ impl MultiDrawIndirectMesh<'_> {
         self.buffer_allocator
             .rent_slice(len, alignment, zero_memory)
     }
-}
-
-impl super::Mesh for MultiDrawIndirectMesh<'_> {
     fn visible(&self) -> bool {
         true
     }
@@ -162,5 +165,63 @@ impl super::Mesh for MultiDrawIndirectMesh<'_> {
         };
 
         self.draw_sync.regenerate(0);
+    }
+}
+
+#[repr(C)]
+struct ModelUniforms {
+    mvp: Mat4,
+    obj: Mat4,
+    world: Mat4,
+}
+
+pub struct MultiDrawIndirectRenderSystem {
+    model_uniform: RingBuffer<ModelUniforms>,
+}
+
+impl MultiDrawIndirectRenderSystem {
+    pub fn new() -> Self {
+        unsafe {
+            gl::FrontFace(gl::CCW);
+            gl::CullFace(gl::BACK);
+            gl::Enable(gl::CULL_FACE);
+
+            let mut alignment = 0;
+            gl::GetIntegerv(gl::UNIFORM_BUFFER_OFFSET_ALIGNMENT, &raw mut alignment);
+
+            Self {
+                model_uniform: RingBuffer::new(8, alignment as usize),
+            }
+        }
+    }
+}
+
+impl<'a> specs::System<'a> for MultiDrawIndirectRenderSystem {
+    type SystemData = (
+        specs::WriteExpect<'a, RingBuffer<super::CameraUniforms>>,
+        specs::ReadExpect<'a, crate::AutomataWindow>,
+        specs::ReadStorage<'a, super::Camera>,
+    );
+
+    fn run(&mut self, (mut view_uniforms, window, cameras): Self::SystemData) {
+        // TODO vvvv some type of GLClearScreen system vvvvv
+        unsafe { gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT) };
+
+        // TODO clip frustum
+
+        use specs::Join;
+        for camera in (&cameras).join() {
+            if let Some(projector) = &camera.projector {
+                view_uniforms.write(super::CameraUniforms {
+                    viewport: window.viewport(),
+                    parameters: projector.parameters(),
+                    projection: projector.matrix(),
+                    view: camera.view,
+                });
+                view_uniforms.bind(crate::opengl::buffer::BufferTarget::Uniform, 0);
+                // draw_models
+                view_uniforms.fence_current();
+            }
+        }
     }
 }
