@@ -59,12 +59,13 @@ impl BoundedWorkerPool {
     /// Thread-safe function used to spawn worker threads, as well as keep them alive and
     /// kill them if need-be.
     fn worker(
+        worker_num: usize,
         global_die: Arc<AtomicBool>,
         local_die: Arc<AtomicBool>,
         has_job: Arc<AtomicBool>,
         jobs: Arc<Receiver<Job>>,
     ) {
-        debug!("Spawned thread successfully, entering receiver loop.");
+        debug!("Worker #{} spawned.", worker_num);
 
         while !global_die.load(Ordering::Acquire) && !local_die.load(Ordering::Acquire) {
             match jobs.recv_timeout(std::time::Duration::from_secs(1)) {
@@ -77,6 +78,8 @@ impl BoundedWorkerPool {
                 Err(RecvTimeoutError::Timeout) => {}
             }
         }
+
+        debug!("Worker #{} killed.", worker_num);
     }
 }
 
@@ -91,9 +94,8 @@ pub fn set_worker_count(worker_count: usize) {
 
     let mut threads_lock = POOL.workers.lock().unwrap();
 
-    for count in 0..worker_count {
-        debug!("Spawning bounded invocation pool thread #{}.", count);
-
+    for worker_num in 0..worker_count {
+        let worker_num_clone = worker_num.clone();
         let local_die = Arc::new(AtomicBool::new(false));
         let has_job = Arc::new(AtomicBool::new(false));
         let thread = std::thread::spawn({
@@ -102,8 +104,9 @@ pub fn set_worker_count(worker_count: usize) {
             let has_job_clone = Arc::clone(&has_job);
             let job_receiver_clone = Arc::clone(&POOL.job_receiver);
 
-            || {
+            move || {
                 BoundedWorkerPool::worker(
+                    worker_num_clone,
                     die_clone,
                     local_die_clone,
                     has_job_clone,
@@ -120,11 +123,11 @@ pub fn set_worker_count(worker_count: usize) {
 pub fn stop_workers() {
     let mut threads_lock = POOL.workers.lock().unwrap();
 
-    POOL.die.store(true, Ordering::Release);
-    for (local_die, has_job, _) in threads_lock.drain(0..) {
+    // Kill threads.
+    threads_lock.drain(0..).for_each(|(local_die, has_job, _)| {
         local_die.store(true, Ordering::Release);
         has_job.store(false, Ordering::Release);
-    }
+    });
 }
 
 /// Queues work onto the pool, returning a completion
