@@ -3,7 +3,7 @@ pub struct Palette<T: Ord> {
     index_bits: usize,
     index_mask: usize,
     indexes_per_slice: usize,
-    data: Vec<usize>,
+    elements: Vec<usize>,
     len: usize,
 }
 
@@ -20,21 +20,22 @@ impl<T: Ord> Palette<T> {
     fn set_value(&mut self, index: usize, lookup_index: usize) {
         let palette_index = (index * self.index_bits) / Self::MAX_INDEX_BITS;
         let slice_offset = (index - (palette_index * self.indexes_per_slice)) * self.index_bits;
-        self.data[palette_index] = (self.data[palette_index] & !(self.index_mask << slice_offset))
+        self.elements[palette_index] = (self.elements[palette_index]
+            & !(self.index_mask << slice_offset))
             | (lookup_index << slice_offset);
 
         debug_assert_eq!(
-            self.get_lookup_index(index),
+            self.calculate_lookup_from_index(index),
             lookup_index,
             "palette has failed to correctly set value"
         );
     }
 
-    fn get_lookup_index(&self, index: usize) -> usize {
+    fn calculate_lookup_from_index(&self, index: usize) -> usize {
         let palette_index = (index * self.index_bits) / Self::MAX_INDEX_BITS;
         let slice_offset = (index - (palette_index * self.indexes_per_slice)) * self.index_bits;
 
-        (self.data[palette_index] & (self.index_mask << slice_offset)) >> slice_offset
+        (self.elements[palette_index] & (self.index_mask << slice_offset)) >> slice_offset
     }
 
     fn allocate_lookup_entry(&mut self, entry: T) -> usize {
@@ -68,7 +69,7 @@ impl<T: Ord> Palette<T> {
                 for slice_index in 0..new_indexes_per_slice {
                     // Find the current index's lookup index, and if it isn't the
                     //  default value, copy it into the new slice.
-                    let lookup_index = self.get_lookup_index(index);
+                    let lookup_index = self.calculate_lookup_from_index(index);
                     if lookup_index > 0 {
                         new_slice |= lookup_index << (slice_index * new_index_bits);
                     }
@@ -87,7 +88,7 @@ impl<T: Ord> Palette<T> {
             self.index_bits = new_index_bits;
             self.index_mask = Self::compute_mask(new_index_bits);
             self.indexes_per_slice = new_indexes_per_slice;
-            self.data = palette;
+            self.elements = palette;
         }
 
         entry_index
@@ -107,8 +108,12 @@ impl<T: Ord> Palette<T> {
         self.len
     }
 
+    pub fn lookup_len(&self) -> usize {
+        self.lookup.len()
+    }
+
     pub fn get(&self, index: usize) -> &T {
-        &self.lookup[self.get_lookup_index(index)]
+        &self.lookup[self.calculate_lookup_from_index(index)]
     }
 
     pub fn set(&mut self, index: usize, value: T) {
@@ -118,5 +123,33 @@ impl<T: Ord> Palette<T> {
             .unwrap_or_else(|_| self.allocate_lookup_entry(value));
 
         self.set_value(index, lookup_index);
+    }
+
+    pub fn get_lookup_value(&self, index: usize) -> &T {
+        &self.lookup[index]
+    }
+}
+
+impl<T: Ord + Copy> Palette<T> {
+    pub fn copy_to_slice(&self, slice: &mut [T]) {
+        assert!(
+            slice.len() >= self.len(),
+            "Slice must be large enought to accomodate palette contents."
+        );
+
+        let index = 0;
+        'elements: for element_index in 0..self.len() {
+            let element = self.elements[element_index];
+
+            for bit_shift in (0..(usize::MAX.count_ones())).step_by(self.index_bits) {
+                if index >= self.len() {
+                    break 'elements;
+                } else {
+                    slice[index] = self
+                        .get_lookup_value((element >> bit_shift) & self.index_mask)
+                        .clone();
+                }
+            }
+        }
     }
 }

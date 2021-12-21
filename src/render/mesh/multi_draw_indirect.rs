@@ -198,21 +198,25 @@ impl MultiDrawIndirectRenderSystem {
 
 impl<'a> specs::System<'a> for MultiDrawIndirectRenderSystem {
     type SystemData = (
-        specs::WriteExpect<'a, RingBuffer<super::CameraUniforms>>,
+        specs::WriteExpect<'a, RingBuffer<crate::render::CameraUniforms>>,
         specs::ReadExpect<'a, crate::AutomataWindow>,
-        specs::ReadStorage<'a, super::Camera>,
+        specs::ReadStorage<'a, crate::render::Camera>,
     );
 
-    fn run(&mut self, (mut view_uniforms, window, cameras): Self::SystemData) {
-        // TODO vvvv some type of GLClearScreen system vvvvv
-        unsafe { gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT) };
+    fn setup(&mut self, world: &mut specs::World) {
+        use specs::{SystemData, WorldExt};
 
+        Self::SystemData::setup(world);
+        world.register::<MultiDrawIndirectMesh>();
+    }
+
+    fn run(&mut self, (mut view_uniforms, window, cameras): Self::SystemData) {
         // TODO clip frustum
 
         use specs::Join;
         for camera in (&cameras).join() {
             if let Some(projector) = &camera.projector {
-                view_uniforms.write(super::CameraUniforms {
+                view_uniforms.write(crate::render::CameraUniforms {
                     viewport: window.viewport(),
                     parameters: projector.parameters(),
                     projection: projector.matrix(),

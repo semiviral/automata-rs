@@ -3,16 +3,17 @@
     const_fn_trait_bound,
     linked_list_cursors,
     once_cell,
-    result_option_inspect
+    result_option_inspect,
+    fn_traits,
+    negative_impls
 )]
 
 use crate::opengl::{buffer::RingBuffer, OpenGLObject};
 use specs::Builder;
 use winit::{dpi::LogicalSize, event_loop::*, window::Window};
 
-mod blocks;
-mod chunks;
 mod collections;
+mod concurrency;
 mod input;
 mod logger;
 mod memory;
@@ -20,6 +21,7 @@ mod opengl;
 mod render;
 mod ring;
 mod time;
+mod world;
 
 #[macro_use]
 extern crate log;
@@ -53,12 +55,7 @@ const DEFAULT_FRAGMENT_SRC: &str = r#"
 "#;
 
 const VERTICES: [f32; 18] = [
-    0.5, -0.5, 0.0,
-    0.5, 0.5, 0.0,
-    -0.5, -0.5, 0.0,
-    -0.5, 0.5, 0.0,
-    -0.5, -0.5, 0.0,
-    0.5, 0.5, 0.0,
+    0.5, -0.5, 0.0, 0.5, 0.5, 0.0, -0.5, -0.5, 0.0, -0.5, 0.5, 0.0, -0.5, -0.5, 0.0, 0.5, 0.5, 0.0,
 ];
 
 const INDICES: [u32; 6] = [1, 2, 3, 2, 3, 1];
@@ -67,6 +64,17 @@ static mut FRAME_COUNTER: usize = 0;
 
 pub fn get_frame_count() -> usize {
     unsafe { FRAME_COUNTER }
+}
+
+bitflags::bitflags! {
+    pub struct DIRECTION : u8 {
+        const EAST = 1 << 0;
+        const UP = 1 << 1;
+        const NORTH = 1 << 2;
+        const WEST = 1 << 3;
+        const DOWN = 1 << 4;
+        const SOUTH = 1 << 5;
+    }
 }
 
 pub struct AutomataWindow {
@@ -148,35 +156,22 @@ fn configure_environment() -> (
 fn main() {
     log::set_max_level(log::LevelFilter::Debug);
     log::set_logger(&logger::LOGGER).unwrap();
-    crate::blocks::REGISTRY.lazy_init();
+
+    concurrency::set_worker_count(num_cpus::get());
 
     let (event_loop, window, gl_context) = configure_environment();
 
     use opengl::{
         buffer::{Buffer, BufferDraw},
-        check_errors,
         shader::{Fragment, ProgramPipeline, ShaderProgram, Vertex},
         VertexArrayObject, VertexFormat,
     };
 
-    let vertex_shader = ShaderProgram::<Vertex>::new(&[DEFAULT_VERTEX_SRC]);
-    check_errors();
-    let fragment_shader = ShaderProgram::<Fragment>::new(&[DEFAULT_FRAGMENT_SRC]);
-    check_errors();
-    let program_pipeline = ProgramPipeline::new(vertex_shader, fragment_shader);
-    check_errors();
     let vertices_buffer = Buffer::<f32>::new_data(&VERTICES, BufferDraw::Static);
-    check_errors();
-    let indices_buffer = Buffer::<u32>::new_data(&INDICES, BufferDraw::Static);
-    check_errors();
     let mut vao = VertexArrayObject::new();
-    check_errors();
     vao.allocate_vertex_attribute(0, 3, 0, 0, VertexFormat::F32(false));
-    check_errors();
     vao.allocate_vertex_buffer_binding(0, &vertices_buffer, 0, 0);
-    check_errors();
     vao.commit(None);
-    check_errors();
 
     use specs::{World, WorldExt};
 
@@ -200,20 +195,38 @@ fn main() {
         max_uniform_alignment as usize,
     ));
 
+    // Register systems.
+    let mut dispatcher = specs::DispatcherBuilder::new()
+        .with(input::InputSystem, "input", &[])
+        .with_barrier()
+        .with_thread_local(render::OpenGLMaintenanceSystem)
+        .with_thread_local(render::mesh::VertexArrayRenderSystem::new())
+        .with_thread_local(render::mesh::MultiDrawIndirectRenderSystem::new())
+        .build();
+
     // Register components.
     world.register::<input::InputVector>();
+    world.register::<render::Material>();
+
+    dispatcher.setup(&mut world);
 
     // Create entities.
     world
         .create_entity()
         .with(input::InputVector(glam::Vec2::ZERO))
-        .build();
-
-    // Register systems.
-    let mut dispatcher = specs::DispatcherBuilder::new()
-        .with(input::InputSystem, "input", &[])
-        .with_barrier()
-        .with_thread_local(render::MultiDrawIndirectRenderSystem::new())
+        .with(render::Material {
+            pipeline: ProgramPipeline::new(
+                ShaderProgram::<Vertex>::new(&[DEFAULT_VERTEX_SRC]),
+                None,
+                None,
+                None,
+                Some(ShaderProgram::<Fragment>::new(&[DEFAULT_FRAGMENT_SRC])),
+            ),
+        })
+        .with(render::mesh::VertexArrayMesh {
+            buffer: vertices_buffer,
+            vao,
+        })
         .build();
 
     let mut stopwatch = time::Stopwatch::new();
@@ -270,32 +283,32 @@ fn main() {
                             info!("GL ERROR CHECK: {}", unsafe { gl::GetError() });
                         }
 
-                        _ => {}
+                        _ => world
+                            .write_resource::<input::InputEventQueue>()
+                            .push_event(input),
                     }
-                } else {
-                    world
-                        .write_resource::<input::InputEventQueue>()
-                        .push_event(input);
                 }
             }
 
             Event::MainEventsCleared => {
-                unsafe {
-                    check_errors();
-                    gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-                    check_errors();
-                    program_pipeline.bind();
-                    check_errors();
-                    vao.bind();
-                    check_errors();
-                    gl::DrawArrays(gl::TRIANGLES, 0, vertices_buffer.data_len() as i32);
-                    check_errors();
+                // unsafe {
+                //     check_errors();
+                //     gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+                //     check_errors();
+                //     program_pipeline.bind();
+                //     check_errors();
+                //     vao.bind();
+                //     check_errors();
+                //     gl::DrawArrays(gl::TRIANGLES, 0, vertices_buffer.data_len() as i32);
+                //     check_errors();
 
-                    gl_context.swap_buffers();
-                }
+                //
+                // }
 
-                // dispatcher.dispatch(&mut world);
-                // world.maintain();
+                dispatcher.dispatch(&mut world);
+                world.maintain();
+
+                gl_context.swap_buffers();
             }
 
             _ => {}

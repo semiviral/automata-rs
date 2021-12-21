@@ -89,15 +89,19 @@ impl RingFenceSync {
         self.ring.next_index()
     }
 
+    /// Waits on the current fence sync object.
     pub fn wait_current(&self) {
         self.fences[self.ring.index()].busy_wait_cpu();
     }
 
+    /// Waits on the current fence sync object, and advances the ring to the next.
     pub fn wait_enter_next(&mut self) {
         self.fences[self.ring.next_index()].busy_wait_cpu();
         self.ring.increment();
     }
 
+    /// Creates a GLFence barrier, allowing the sync object to wait until all
+    /// previous OpenGL commands have been processed.
     pub fn fence_current(&mut self) {
         self.fences[self.ring.index()] = FenceSync::new(0);
     }

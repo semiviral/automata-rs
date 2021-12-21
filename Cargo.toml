@@ -16,3 +16,6 @@ lazy_static = "*"
 chrono = { version = "*", default-features = false, features = ["clock"] }
 num_enum = "*"
 specs = { version = "*", default-features = false, features = ["specs-derive"] }
+rusty_pool = { version = "*", default_features = false }
+crossbeam-channel = "*"
+num_cpus = "*"

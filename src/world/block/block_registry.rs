@@ -38,7 +38,7 @@ pub struct BlockRegistry {
 }
 
 impl BlockRegistry {
-    pub fn lazy_init(&self) {}
+    pub const AIR_ID: u16 = 0;
 
     fn next_id(&self) -> Option<u16> {
         use std::sync::atomic::Ordering;
@@ -90,16 +90,16 @@ impl BlockRegistry {
     }
 }
 
-lazy_static::lazy_static! {
-    pub static ref REGISTRY: BlockRegistry = {
+impl Default for BlockRegistry {
+    fn default() -> Self {
         let registry = BlockRegistry {
             definitions: RwLock::new(Vec::new()),
             id_lookup: RwLock::new(HashMap::new()),
-            next_id: AtomicU16::new(0)
+            next_id: AtomicU16::new(0),
         };
 
         registry.register_block("core", "air", Attributes::TRANSPARENT);
 
         registry
-    };
+    }
 }
