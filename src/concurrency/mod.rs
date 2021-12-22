@@ -1,4 +1,5 @@
 use crossbeam_channel::{Receiver, RecvError, RecvTimeoutError, SendError, Sender};
+use specs::hibitset::AtomicBitSet;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -6,6 +7,19 @@ use std::{
     },
     thread::JoinHandle,
 };
+
+struct Worker(Arc<AtomicBool>, JoinHandle<()>);
+
+impl Worker {
+    // Safely stop and join the worker thread with the foreground.
+    fn stop(self) {
+        self.0.store(true, Ordering::Relaxed);
+
+        if let Err(args) = self.1.join() {
+            error!("Background worker thread stop panic: {:?}", args);
+        }
+    }
+}
 
 /// Internal struct used to wrap job data.
 struct Job {
@@ -32,10 +46,10 @@ impl JobCompletion {
 }
 
 lazy_static::lazy_static! {
-    static ref POOL: Mutex<(Vec<JoinHandle<()>>, (Sender<Job>, Receiver<Job>))> = Mutex::new((Vec::new(), crossbeam_channel::unbounded()));
+    static ref POOL: Mutex<(Vec<Worker>, (Sender<Job>, Receiver<Job>))> = Mutex::new((Vec::new(), crossbeam_channel::unbounded()));
 }
 
-/// Stops all workers currently alive in the pool, and reinitializes
+/// Stops all workers currently alive in the pool, and reinitialize
 /// the pool with the given count of workers.
 pub fn set_worker_count(worker_count: usize) {
     stop_workers();
@@ -43,22 +57,27 @@ pub fn set_worker_count(worker_count: usize) {
     let mut pool_lock = POOL.lock().unwrap();
 
     for worker_num in 0..worker_count {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let cancellation_clone = Arc::clone(&cancellation);
         let job_receiver_clone = pool_lock.1 .1.clone();
 
-        pool_lock.0.push(std::thread::spawn({
-            move || {
-                debug!("Worker #{} spawned.", worker_num);
+        pool_lock.0.push(Worker(
+            cancellation,
+            std::thread::spawn({
+                move || {
+                    debug!("Background worker #{} spawned.", worker_num);
 
-                loop {
-                    match job_receiver_clone.recv() {
-                        Ok(job) => job.execute(),
-                        Err(RecvError) => break,
+                    while !cancellation_clone.load(Ordering::Relaxed) {
+                        match job_receiver_clone.recv() {
+                            Ok(job) => job.execute(),
+                            Err(RecvError) => break,
+                        }
                     }
-                }
 
-                debug!("Worker #{} killed.", worker_num);
-            }
-        }));
+                    debug!("Background worker #{} killed.", worker_num);
+                }
+            }),
+        ));
     }
 }
 
@@ -66,8 +85,12 @@ pub fn set_worker_count(worker_count: usize) {
 pub fn stop_workers() {
     let mut pool_lock = POOL.lock().unwrap();
 
-    pool_lock.0.clear();
+    // First, drop the current channel by replacing it.
+    // This will disconnect the channel, ensuring any connected workers
+    // can stop waiting on the channels.
     pool_lock.1 = crossbeam_channel::unbounded();
+    // Secondly, we drain and stop each individual worker.
+    pool_lock.0.drain(0..).for_each(|worker| worker.stop());
 }
 
 /// Queues work onto the pool, returning a completion
