@@ -198,9 +198,9 @@ impl MultiDrawIndirectRenderSystem {
 
 impl<'a> specs::System<'a> for MultiDrawIndirectRenderSystem {
     type SystemData = (
-        specs::WriteExpect<'a, RingBuffer<crate::render::CameraUniforms>>,
+        specs::WriteExpect<'a, RingBuffer<crate::render::camera::CameraUniforms>>,
         specs::ReadExpect<'a, crate::AutomataWindow>,
-        specs::ReadStorage<'a, crate::render::Camera>,
+        specs::ReadStorage<'a, crate::render::camera::Camera>,
     );
 
     fn setup(&mut self, world: &mut specs::World) {
@@ -216,12 +216,12 @@ impl<'a> specs::System<'a> for MultiDrawIndirectRenderSystem {
         use specs::Join;
         for camera in (&cameras).join() {
             if let Some(projector) = &camera.projector {
-                view_uniforms.write(crate::render::CameraUniforms {
-                    viewport: window.viewport(),
-                    parameters: projector.parameters(),
-                    projection: projector.matrix(),
-                    view: camera.view,
-                });
+                view_uniforms.write(crate::render::camera::CameraUniforms::new(
+                    window.viewport(),
+                    projector.parameters(),
+                    projector.matrix(),
+                    camera.view,
+                ));
                 view_uniforms.bind(crate::opengl::buffer::BufferTarget::Uniform, 0);
                 // draw_models
                 view_uniforms.fence_current();

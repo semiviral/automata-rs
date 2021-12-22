@@ -89,6 +89,7 @@ impl<T: ShaderType> ShaderProgram<T> {
                 &raw mut max_uniform_len,
             );
 
+            debug!("Identified {} uniforms for current shader.", uniform_count);
             let mut uniform_length = -1;
             for index in 0..(uniform_count as u32) {
                 let mut name_buffer = Vec::<u8>::with_capacity(max_uniform_len as usize);
@@ -102,9 +103,9 @@ impl<T: ShaderType> ShaderProgram<T> {
                     name_buffer_ptr,
                 );
 
-                let name_len = (uniform_length + 1) as usize;
+                let name_len = uniform_length as usize;
                 name_buffer.set_len(name_len);
-                name_buffer.shrink_to(name_len);
+                name_buffer.shrink_to_fit();
                 uniforms.insert(
                     String::from_utf8(name_buffer)
                         .expect("Could not convert uniform name to string from buffer."),
@@ -122,6 +123,27 @@ impl<T: ShaderType> ShaderProgram<T> {
 
     pub fn get_uniform(&self, name: &str, location: i32) -> Option<i32> {
         self.uniforms.get(&name.to_owned()).copied()
+    }
+
+    pub fn set_uniform_mat4(&self, name: &str, value: glam::Mat4) -> Result<(), ()> {
+        match self.uniforms.get(name) {
+            Some(location) => unsafe {
+                gl::ProgramUniformMatrix4fv(
+                    self.handle(),
+                    1,
+                    1,
+                    false as u8,
+                    &raw const value as *const _,
+                );
+                crate::opengl::check_errors();
+                Ok(())
+            },
+            None => Err(()),
+        }
+    }
+
+    pub fn get_uniforms(&self) -> std::collections::btree_map::Keys<String, i32> {
+        self.uniforms.keys()
     }
 }
 

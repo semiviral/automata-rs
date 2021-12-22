@@ -15,7 +15,7 @@ pub struct Projector {
 impl Projector {
     pub fn new_perspective(fov: f32, aspect_ratio: f32, near_clip: f32, far_clip: f32) -> Self {
         assert!(
-            fov > 0.0 && fov < PI,
+            fov > 0.0 && fov < 360.0,
             "Field of view must be a valid 360 degree value."
         );
         assert!(near_clip > 0.0, "Near clip must be a positive distance.");
@@ -67,6 +67,15 @@ impl Projector {
 
     pub fn matrix(&self) -> Mat4 {
         self.matrix
+    }
+}
+
+#[repr(C)]
+pub struct CameraUniforms(Vec4, Vec4, Mat4, Mat4);
+
+impl CameraUniforms {
+    pub const fn new(viewport: Vec4, parameters: Vec4, projection: Mat4, view: Mat4) -> Self {
+        Self(viewport, parameters, projection, view)
     }
 }
 

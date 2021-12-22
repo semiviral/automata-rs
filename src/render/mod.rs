@@ -1,19 +1,11 @@
-mod camera;
 mod material;
+
+pub mod camera;
 pub mod mesh;
 
-pub use camera::*;
 pub use material::*;
 
 use glam::{Mat4, Vec4};
-
-#[repr(C)]
-pub struct CameraUniforms {
-    viewport: Vec4,
-    parameters: Vec4,
-    projection: Mat4,
-    view: Mat4,
-}
 
 pub struct OpenGLMaintenanceSystem;
 

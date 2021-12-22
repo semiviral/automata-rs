@@ -53,6 +53,26 @@ impl ProgramPipeline {
         }
     }
 
+    pub fn vertex(&self) -> &ShaderProgram<super::Vertex> {
+        &self.vertex
+    }
+
+    pub fn tesselation_ctrl(&self) -> Option<&ShaderProgram<super::TessellationControl>> {
+        self.tess_ctrl.as_ref()
+    }
+
+    pub fn tesselation_eval(&self) -> Option<&ShaderProgram<super::TessellationEval>> {
+        self.tess_eval.as_ref()
+    }
+
+    pub fn geometry(&self) -> Option<&ShaderProgram<super::Geometry>> {
+        self.geometry.as_ref()
+    }
+
+    pub fn fragment(&self) -> Option<&ShaderProgram<super::Fragment>> {
+        self.fragment.as_ref()
+    }
+
     pub fn bind(&self) {
         unsafe { gl::BindProgramPipeline(self.handle()) };
     }

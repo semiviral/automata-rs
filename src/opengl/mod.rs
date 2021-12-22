@@ -23,7 +23,7 @@ pub enum GLError {
 pub fn check_errors() {
     match GLError::try_from(unsafe { gl::GetError() }) {
         Ok(gl_error) if gl_error != GLError::NoError => {
-            panic!("OpenGL error: {:?}", gl_error);
+            error!("OpenGL error: {:?}", gl_error);
         }
         Err(err) => {
             panic!("Invalid OpenGL error code: {:?}", err)

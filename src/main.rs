@@ -30,7 +30,21 @@ extern crate gl;
 const DEFAULT_VERTEX_SRC: &str = r#"
     #version 450 core
 
-    layout (location = 0) in vec2 v_pos;
+    layout (location = 0) in vec3 v_pos;    
+
+    layout (std140, binding = 0) uniform camera_uniforms
+    {
+        vec4 _viewport;
+        vec4 _params;
+        mat4 _proj;
+        mat4 _view;
+    };
+
+    layout (std140, binding = 2) uniform model_uniforms
+    {
+        mat4 _model;
+    };
+
 
     out gl_PerVertex { vec4 gl_Position; };
 
@@ -38,7 +52,7 @@ const DEFAULT_VERTEX_SRC: &str = r#"
 
     void main() {
         a_color = vec3(0.3);
-        gl_Position = vec4(v_pos, 0.0, 1.0);
+        gl_Position = /* (_model * _view * _proj) * */ vec4(v_pos, 1.0);
     }
 "#;
 
@@ -190,7 +204,7 @@ fn main() {
             &raw mut max_uniform_alignment,
         );
     }
-    world.insert(RingBuffer::<crate::render::CameraUniforms>::new(
+    world.insert(RingBuffer::<crate::render::camera::CameraUniforms>::new(
         3,
         max_uniform_alignment as usize,
     ));
@@ -198,6 +212,16 @@ fn main() {
     // Register systems.
     let mut dispatcher = specs::DispatcherBuilder::new()
         .with(input::InputSystem, "input", &[])
+        .with(
+            input::InputVectorTranslationSystem,
+            "input_translation",
+            &["input"],
+        )
+        .with(
+            world::TransformMatrixSystem,
+            "transform",
+            &["input_translation"],
+        )
         .with_barrier()
         .with_thread_local(render::OpenGLMaintenanceSystem)
         .with_thread_local(render::mesh::VertexArrayRenderSystem::new())
@@ -213,7 +237,6 @@ fn main() {
     // Create entities.
     world
         .create_entity()
-        .with(input::InputVector(glam::Vec2::ZERO))
         .with(render::Material {
             pipeline: ProgramPipeline::new(
                 ShaderProgram::<Vertex>::new(&[DEFAULT_VERTEX_SRC]),
@@ -227,7 +250,31 @@ fn main() {
             buffer: vertices_buffer,
             vao,
         })
+        .with(world::Transform::default())
         .build();
+
+    {
+        let aspect_ratio = world.read_resource::<AutomataWindow>().aspect_ratio();
+
+        world
+            .create_entity()
+            .with(input::InputVector {
+                keyb: glam::Vec2::ZERO,
+                sensitivity: 100.0,
+            })
+            .with(render::camera::Camera {
+                view: glam::Mat4::IDENTITY,
+                projector_mode: render::camera::ProjectorMode::Prespective,
+                projector: Some(crate::render::camera::Projector::new_perspective(
+                    90.0,
+                    aspect_ratio,
+                    0.1,
+                    1000.0,
+                )),
+            })
+            .with(world::Transform::default())
+            .build();
+    }
 
     let mut stopwatch = time::Stopwatch::new();
 
@@ -258,6 +305,16 @@ fn main() {
             } => unsafe {
                 gl::Viewport(0, 0, size.width as i32, size.height as i32);
             },
+
+            Event::WindowEvent {
+                event:
+                    WindowEvent::AxisMotion {
+                        device_id,
+                        axis,
+                        value,
+                    },
+                ..
+            } => {}
 
             Event::WindowEvent {
                 event:
